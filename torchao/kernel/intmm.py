@@ -69,6 +69,22 @@ def int_matmul(a, b):
     return safe_int_mm(a, b)
 
 
+if intmm_triton:
+    lib = intmm_triton.lib
+else:
+    lib = torch.library.Library("torchao", "FRAGMENT")
+    lib.define("int_scaled_matmul(Tensor a, Tensor b, Tensor scales1) -> Tensor")
+
+
+@torch.library.impl(lib, "int_scaled_matmul", "CPU")
+def int_scaled_matmul_cpu(a, b, scales1):
+    try:
+        c = torch._int_mm(a, b)
+    except NotImplementedError:
+        c = torch.matmul(a.to(scales1.dtype), b.to(scales1.dtype))
+    return c.to(scales1.dtype) * scales1
+
+
 def int_scaled_matmul(a, b, scales1):
     M, K = a.shape
     K, N = b.shape
@@ -77,7 +93,8 @@ def int_scaled_matmul(a, b, scales1):
     assert scales1.is_contiguous()
     scales1 = scales1.expand((M, N))
     assert scales1.dim() == 2
-    if intmm_triton is not None and AUTOTUNER_ENABLE:
+    if (intmm_triton is not None and AUTOTUNER_ENABLE) or \
+            (a.device.type == 'cpu' and b.device.type == 'cpu'):
         return torch.ops.torchao.int_scaled_matmul(a, b, scales1)
 
     c = safe_int_mm(a, b)
