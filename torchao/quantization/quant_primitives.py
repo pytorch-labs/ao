@@ -174,6 +174,27 @@ def quantize_affine(
     Output:
       quantized tensor with requested dtype
     """
+    return _quantize_affine_no_dtype_casting(
+        input,
+        block_size,
+        scale,
+        zero_point,
+        output_dtype,
+        quant_min,
+        quant_max,
+        zero_point_domain,
+    ).to(output_dtype)
+
+def _quantize_affine_no_dtype_casting(
+    input: torch.Tensor,
+    block_size: Tuple[int, ...],
+    scale: torch.Tensor,
+    zero_point: Optional[torch.Tensor],
+    output_dtype: torch.dtype,
+    quant_min: Optional[int] = None,
+    quant_max: Optional[int] = None,
+    zero_point_domain: ZeroPointDomain = ZeroPointDomain.INT,
+):
     # TODO: validations
     # TODO: validate scale/zero_point dimensions are compatible with block_size
     assert input.dtype in [torch.float32, torch.float16, torch.bfloat16], f"Unsupported input dtype: {input.dtype}"
@@ -191,7 +212,7 @@ def quantize_affine(
     if zero_point_domain == ZeroPointDomain.INT:
         quant = torch.clamp(
             torch.round(input * (1.0 / scale)) + zero_point, quant_min, quant_max
-        ).to(output_dtype)
+        )
     else:
         assert zero_point_domain == ZeroPointDomain.FLOAT
         mid_point = (quant_max + quant_min + 1) / 2
@@ -200,7 +221,7 @@ def quantize_affine(
             torch.clamp(
                 torch.round((input - min_val) / scale),
                 quant_min, quant_max)
-        ).to(output_dtype)
+        )
     quant = quant.view(original_shape)
 
     return quant
@@ -238,11 +259,68 @@ def dequantize_affine(
     Output:
       dequantized Tensor, with requested dtype or fp32
     """
-
     # TODO: validations
     # TODO: validate scale/zero_point dimensions are compatible with block_size
     assert input.dtype == input_dtype, f"Expected: {input_dtype}, got: {input.dtype}"
     assert output_dtype in [torch.float32, torch.float16, torch.bfloat16], f"Unsupported output dtype: {output_dtype}"
+
+    if zero_point_domain == ZeroPointDomain.INT:
+        input = input.to(torch.int32)
+        if zero_point is not None:
+            zero_point = zero_point.to(torch.int32)
+
+    dq = _do_dequantize_affine(
+        input,
+        block_size,
+        scale,
+        zero_point,
+        input_dtype,
+        quant_min,
+        quant_max,
+        zero_point_domain,
+        output_dtype=output_dtype,
+    )
+    return dq.to(output_dtype)
+
+
+def _dequantize_affine_no_dtype_casting(
+    input: torch.Tensor,
+    block_size: Tuple[int, ...],
+    scale: torch.Tensor,
+    zero_point: Optional[torch.Tensor],
+    input_dtype: torch.dtype,
+    quant_min: Optional[int] = None,
+    quant_max: Optional[int] = None,
+    zero_point_domain: ZeroPointDomain = ZeroPointDomain.INT,
+    *,
+    output_dtype: torch.dtype = torch.float32
+):
+    assert input.dtype == input_dtype, f"Expected: {input_dtype}, got: {input.dtype}"
+    return _do_dequantize_affine(
+        input,
+        block_size,
+        scale,
+        zero_point,
+        input_dtype,
+        quant_min,
+        quant_max,
+        zero_point_domain,
+        output_dtype=input.dtype,
+    )
+
+
+def _do_dequantize_affine(
+    input: torch.Tensor,
+    block_size: Tuple[int, ...],
+    scale: torch.Tensor,
+    zero_point: Optional[torch.Tensor],
+    input_dtype: torch.dtype,
+    quant_min: Optional[int] = None,
+    quant_max: Optional[int] = None,
+    zero_point_domain: ZeroPointDomain = ZeroPointDomain.INT,
+    *,
+    output_dtype: torch.dtype = torch.float32,
+):
     quant_min, quant_max = _get_and_check_qmin_qmax(input_dtype, quant_min, quant_max)
 
     shape_for_reduction, reduction_dims = _get_reduction_params(block_size, input.size())
@@ -258,9 +336,9 @@ def dequantize_affine(
     if zero_point_domain == ZeroPointDomain.INT:
         # Force a copy to avoid input modification due
         # to upcoming in-place operations.
-        dequant = input.to(torch.int32, copy=True)
+        dequant = input.clone()
         if zero_point is not None:
-            dequant -= zero_point.to(torch.int32)
+            dequant -= zero_point
         dequant = dequant.to(output_dtype)
         dequant *= scale
     else:
@@ -273,7 +351,8 @@ def dequantize_affine(
         if zero_point is not None:
             dequant += zero_point
 
-    return dequant.view(original_shape).to(output_dtype)
+    return dequant.view(original_shape)
+
 
 def choose_qparams_affine(
    input: torch.Tensor,
