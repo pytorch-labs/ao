@@ -23,19 +23,20 @@ __all__ = [
 
 
 def benchmark_model(model, num_runs, input_tensor):
-    torch.cuda.synchronize()
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
+    start_event = torch.Event(enable_timing=True)
+    end_event = torch.Event(enable_timing=True)
     start_event.record()
+    start_event.synchronize()
 
     # benchmark
     for _ in range(num_runs):
         with torch.autograd.profiler.record_function("timed region"):
             model(input_tensor)
 
+    end_event.synchronize()
     end_event.record()
-    torch.cuda.synchronize()
     return start_event.elapsed_time(end_event) / num_runs
+
 
 def profiler_runner(path, fn, *args, **kwargs):
     with torch.profiler.profile(
