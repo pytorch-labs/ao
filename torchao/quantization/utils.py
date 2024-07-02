@@ -10,6 +10,8 @@ from torch.utils._python_dispatch import TorchDispatchMode
 import torch.nn.utils.parametrize as parametrize
 from torchao.utils import find_multiple
 from .quant_primitives import (
+    _quantize_affine_no_dtype_casting,
+    _dequantize_affine_no_dtype_casting,
     MappingType,
     ZeroPointDomain,
     choose_qparams_affine,
@@ -334,6 +336,7 @@ def groupwise_affine_quantize_tensor_from_qparams(
     zeros,
     n_bit=4,
     groupsize=128,
+    cast_dtypes=True,
 ):
     assert groupsize > 1
     # needed for GPTQ single column quantize
@@ -348,7 +351,8 @@ def groupwise_affine_quantize_tensor_from_qparams(
     quant_min = 0
     quant_max = 2 ** n_bit - 1
 
-    return quantize_affine(w, block_size, scales, zeros, output_dtype, quant_min, quant_max, zero_point_domain = ZeroPointDomain.FLOAT)
+    quantize_function = quantize_affine if cast_dtypes else _quantize_affine_no_dtype_casting
+    return quantize_function(w, block_size, scales, zeros, output_dtype, quant_min, quant_max, zero_point_domain=ZeroPointDomain.FLOAT)
 
 def groupwise_affine_dequantize_tensor_from_qparams(
     w_int4x8,
@@ -356,6 +360,7 @@ def groupwise_affine_dequantize_tensor_from_qparams(
     zeros,
     n_bit=4,
     groupsize=128,
+    cast_dtypes=True,
 ):
     assert groupsize > 1
     # needed for GPTQ single column dequantize
@@ -368,7 +373,9 @@ def groupwise_affine_dequantize_tensor_from_qparams(
     input_dtype = torch.int32
     quant_min = 0
     quant_max = 2**n_bit - 1
-    return dequantize_affine(w_int4x8, block_size, scales, zeros, input_dtype, quant_min, quant_max, zero_point_domain=ZeroPointDomain.FLOAT, output_dtype=scales.dtype)
+
+    dequantize_function = dequantize_affine if cast_dtypes else _dequantize_affine_no_dtype_casting
+    return dequantize_function(w_int4x8, block_size, scales, zeros, input_dtype, quant_min, quant_max, zero_point_domain=ZeroPointDomain.FLOAT, output_dtype=scales.dtype)
 
 
 def groupwise_affine_quantize_tensor(w, n_bit=4, groupsize=128, dtype=torch.bfloat16):
